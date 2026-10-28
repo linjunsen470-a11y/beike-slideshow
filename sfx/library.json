@@ -1,0 +1,88 @@
+{
+  "note": "Original sound effects synthesized procedurally by sfx_tools.py (numpy: filtered noise sweeps, sine pitch drops, gated noise, impulses). No third-party samples were used. license is null on purpose: these files are project-original synthesis and are not under a third-party license.",
+  "origin": "procedural-original",
+  "license": null,
+  "sample_rate": 48000,
+  "sounds": [
+    {
+      "id": "whoosh",
+      "file": "whoosh.wav",
+      "duration_sec": 0.46,
+      "peak_sec": 0.2727,
+      "sample_rate": 48000,
+      "channels": 2,
+      "used_for": [
+        "whip",
+        "push",
+        "spin",
+        "slide_left",
+        "slide_right",
+        "slide_up",
+        "wipe",
+        "zoom",
+        "fade",
+        "black"
+      ],
+      "description": "Filtered-noise band sweep with a soft rising tone. Peak at the centre of the file.",
+      "origin": "procedural-original",
+      "license": null
+    },
+    {
+      "id": "impact",
+      "file": "impact.wav",
+      "duration_sec": 0.4,
+      "peak_sec": 0.0097,
+      "sample_rate": 48000,
+      "channels": 2,
+      "used_for": [
+        "zoom_blur",
+        "shake"
+      ],
+      "description": "Sine pitch drop plus a short bright click. Peak is the click, aligned to the cut.",
+      "origin": "procedural-original",
+      "license": null
+    },
+    {
+      "id": "shutter",
+      "file": "shutter.wav",
+      "duration_sec": 0.26,
+      "peak_sec": 0.0094,
+      "sample_rate": 48000,
+      "channels": 2,
+      "used_for": [
+        "flash"
+      ],
+      "description": "Two high-passed noise clicks (shutter). The louder click is the peak.",
+      "origin": "procedural-original",
+      "license": null
+    },
+    {
+      "id": "glitch",
+      "file": "glitch.wav",
+      "duration_sec": 0.34,
+      "peak_sec": 0.2473,
+      "sample_rate": 48000,
+      "channels": 2,
+      "used_for": [
+        "glitch"
+      ],
+      "description": "Gated, bit-crushed noise with a descending buzz.",
+      "origin": "procedural-original",
+      "license": null
+    },
+    {
+      "id": "shimmer",
+      "file": "shimmer.wav",
+      "duration_sec": 0.5,
+      "peak_sec": 0.2749,
+      "sample_rate": 48000,
+      "channels": 2,
+      "used_for": [
+        "light_leak"
+      ],
+      "description": "High sine partials plus airy noise. Peak at the centre of the swell.",
+      "origin": "procedural-original",
+      "license": null
+    }
+  ]
+}
