@@ -1,9 +1,48 @@
-__pycache__/
-*.pyc
-bgm/
-fonts/
-reports/
-*.mp4
-*.log
+# Credentials and machine-local configuration
 .env
+.env.*
+!.env.example
 *.key
+*.pem
+*.p12
+*.pfx
+BEIKE_MCP_API_KEY*
+.beike/
+local-config.json
+
+# Local listing data, downloaded tools, media and review artifacts
+/data/
+/bgm/
+/fonts/
+/reports/
+/video/
+/output/
+/outputs/
+*.mp4
+*.mov
+*.mkv
+*.timeline.json
+*.log
+*.tmp
+*.part
+*.zip
+*.tar.gz
+*.exe
+
+# Python runtime and disposable caches (audio analysis caches stay on disk)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.analysis/
+
+# Editor / OS scratch files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~

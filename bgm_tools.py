@@ -1,4 +1,8 @@
-"""BGM helpers: track library lookup, climax (chorus) detection, segment cutting.
+"""BGM helpers: track lookup, full-clip preparation and deterministic beat analysis.
+
+The slideshow uses prepare_track to retain the entire selected high-energy
+clip, with loudness/volume processing only. Legacy window selection and cutting
+helpers below remain available to standalone callers.
 
 Climax detection
 ----------------
@@ -24,14 +28,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import random
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
 AUDIO_EXT = {'.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus'}
+MAX_TRACK_SECONDS = 21.0  # Exclusive: the candidate library contains short clips only.
 SR = 22050
 HOP = 512
 
@@ -41,21 +48,39 @@ def slug(text):
 
 
 # ---- library ---------------------------------------------------------------
+@lru_cache(maxsize=512)
+def _library_duration(path, size, mtime_ns):
+    # Stat fields invalidate the cache when an audio file is replaced in place.
+    return probe_duration(path)
+
+
 def list_tracks(folder):
-    """Audio files in a folder, with metadata from library.json when present."""
+    """Playable clips shorter than 21 seconds, with optional library metadata.
+
+    Filtering never edits audio or deletes files. Explicit file playback and
+    prepare_track still preserve the entire supplied clip.
+    """
     folder = Path(folder)
     meta = {}
     lib = folder / 'library.json'
     if lib.is_file():
-        for item in json.loads(lib.read_text()).get('tracks', []):
+        for item in json.loads(lib.read_text(encoding='utf-8')).get('tracks', []):
             meta[item.get('file')] = item
     tracks = []
     for path in sorted(folder.iterdir()) if folder.is_dir() else []:
         if path.suffix.lower() in AUDIO_EXT and path.is_file():
+            stat = path.stat()
+            try:
+                duration = _library_duration(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+            except (subprocess.CalledProcessError, ValueError):
+                continue  # Undecodable files are not music candidates.
+            if duration >= MAX_TRACK_SECONDS:
+                continue
             info = dict(meta.get(path.name, {}))
             info.setdefault('title', path.stem)
             info['path'] = str(path)
             info['slug'] = info.get('slug') or slug(path.stem)
+            info['duration'] = duration
             tracks.append(info)
     return tracks
 
@@ -73,8 +98,9 @@ def pick_track(folders, name=None, rotate_key=None, prefer=None, seed=None):
     for folder in folders:
         pool += list_tracks(folder)
     if not pool:
-        raise FileNotFoundError(f'No audio files in {", ".join(map(str, folders))}')
-    if name:
+        raise FileNotFoundError(f'No playable audio shorter than {MAX_TRACK_SECONDS:g}s in '
+                                + ', '.join(map(str, folders)))
+    if name and name.lower() not in ('auto', 'random'):
         key = name.lower()
         hits = [t for t in pool if key in Path(t['path']).name.lower() or key in t['title'].lower()
                 or key in t['slug']]
@@ -96,17 +122,19 @@ def pick_track(folders, name=None, rotate_key=None, prefer=None, seed=None):
             pool = ordered
     if seed is not None:
         return random.Random(seed).choice(pool)
-    if rotate_key is None:
-        return pool[0]
-    index = int(hashlib.md5(str(rotate_key).encode()).hexdigest(), 16) % len(pool)
-    return pool[index]
+    # Default: true random pick across candidate audio clips
+    return random.choice(pool)
 
 
 # ---- analysis --------------------------------------------------------------
 def probe_duration(path):
-    out = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of',
-                          'default=nw=1:nk=1', str(path)], capture_output=True, text=True).stdout
-    return float(out.strip() or 0)
+    result = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of',
+                             'default=nw=1:nk=1', str(path)],
+                            capture_output=True, text=True, check=True)
+    duration = float(result.stdout.strip())
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError(f'Audio duration must be positive and finite: {path}')
+    return duration
 
 
 def decode_mono(path, sr=SR):
@@ -342,14 +370,12 @@ def find_phrase(path, length=17.6, headroom=2.6, tail_guard=1.0):
 
 
 # ---- cutting ---------------------------------------------------------------
-def cut_segment(path, start, length, out, lufs=-14.0, fade_in=0.3, fade_out=1.5, gain=1.0, loop=False):
-    """Two-pass loudnorm + fades -> 48 kHz stereo WAV. Returns measured stats."""
-    src = ['-stream_loop', '-1'] if loop else []
-    trim = src + ['-ss', f'{start:.3f}', '-t', f'{length:.3f}', '-i', str(path)]
+def _normalise_audio(inputs, out, lufs, gain, fades=()):
+    """Shared two-pass loudness processing; inputs determine any legacy trimming."""
     target = f'I={lufs}:TP=-1.5:LRA=11'
-    first = subprocess.run(['ffmpeg', '-hide_banner', '-nostats'] + trim +
+    first = subprocess.run(['ffmpeg', '-hide_banner', '-nostats'] + inputs +
                            ['-af', f'loudnorm={target}:print_format=json', '-f', 'null', '-'],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, check=True)
     m = json.loads(first.stderr[first.stderr.rfind('{'):first.stderr.rfind('}') + 1])
     norm = (f"loudnorm={target}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
             f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:"
@@ -357,11 +383,31 @@ def cut_segment(path, start, length, out, lufs=-14.0, fade_in=0.3, fade_out=1.5,
     chain = [norm, 'aresample=48000']
     if gain != 1.0:
         chain.append(f'volume={gain}')
-    chain += [f'afade=t=in:st=0:d={fade_in}', f'afade=t=out:st={max(0.0, length - fade_out):.3f}:d={fade_out}']
-    subprocess.run(['ffmpeg', '-hide_banner', '-v', 'error', '-y'] + trim +
+    chain += list(fades)
+    subprocess.run(['ffmpeg', '-hide_banner', '-v', 'error', '-y'] + inputs +
                    ['-af', ','.join(chain), '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', str(out)],
                    check=True)
     return dict(input_lufs=float(m['input_i']), target_lufs=lufs)
+
+
+def prepare_track(path, out, lufs=-14.0, gain=0.75):
+    """Decode the ENTIRE clip to a mixable WAV. No seeking, trimming, looping or fades.
+
+    Probe the resulting PCM duration rather than MP3 container padding so the
+    picture timeline matches the audio samples actually played.
+    """
+    stats = _normalise_audio(['-i', str(path)], out, lufs, gain)
+    stats['duration'] = probe_duration(out)
+    return stats
+
+
+def cut_segment(path, start, length, out, lufs=-14.0, fade_in=0.3, fade_out=1.5, gain=1.0, loop=False):
+    """Legacy segment helper; the slideshow uses prepare_track to keep clips whole."""
+    src = ['-stream_loop', '-1'] if loop else []
+    inputs = src + ['-ss', f'{start:.3f}', '-t', f'{length:.3f}', '-i', str(path)]
+    fades = [f'afade=t=in:st=0:d={fade_in}',
+             f'afade=t=out:st={max(0.0, length - fade_out):.3f}:d={fade_out}']
+    return _normalise_audio(inputs, out, lufs, gain, fades)
 
 
 def measure_lufs(path):
@@ -385,6 +431,38 @@ if __name__ == '__main__':      # quick CLI: python3 bgm_tools.py track.mp3 22.5
 
 # ---- deterministic analysis cache -----------------------------------------------
 ANALYSIS_VERSION = 1
+
+
+def analyze_clip_cached(path):
+    """Beat annotations for an already curated high-energy clip, always from t=0.
+
+    Uses its own cache file, preserving the existing phrase-analysis caches.
+    No window selection or music edits are performed.
+    """
+    path = Path(path)
+    st = path.stat()
+    key = dict(v=ANALYSIS_VERSION, size=st.st_size, mtime_ns=st.st_mtime_ns)
+    cache = path.parent / '.analysis' / f'{path.stem}.clip.json'
+    try:
+        data = json.loads(cache.read_text(encoding='utf-8'))
+        if data.get('key') == key:
+            return dict(data['result'], cache='hit')
+    except (OSError, ValueError, KeyError):
+        pass
+    y = decode_mono(path)
+    _rms, onset, tempo, beats, engine = _features(y, SR)
+    drive = _norm(onset)
+    fps = SR / HOP
+    phase = _bar_phase(beats, drive, fps)
+    seg_b, seg_s, down, strong = _annotate_beats(beats, drive, fps, 0, len(y) / SR, phase)
+    result = dict(beats=seg_b, beat_strength=seg_s, downbeats=down,
+                  strong_beats=strong, phrase_onsets=down[::2], tempo=tempo, engine=engine)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(dict(key=key, result=result)), encoding='utf-8')
+    except OSError:
+        pass
+    return dict(result, cache='miss')
 
 
 def find_phrase_cached(path, length=17.6, headroom=2.6, tail_guard=1.0):

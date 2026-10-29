@@ -1,49 +1,24 @@
-# Slideshow template plan (v10)
+# 当前模板约定
 
-Four presets share one timeline: 1080×1920, 30 fps, 15–20 s, the sale/new/rent shot order, phrase-synced soft BGM, no shake, no hard cut, no reused source image, pure black empty space, full-frame photos (never blurred to fill), and the same Noto Serif / Noto Sans CJK Black faces. 花字 stays at least 48 px; titles and the price numerals stay at least 120 px. Text, including stroke and shadow, stays at least 60 px inside the frame. What changes is the composition.
+更新：2026-10-29。日常只维护以下五个推荐模板，默认 random 从这五个选择。旧名称仍可显式使用；完整演进记录已归档。
 
-Selection: `build_slideshow.py --template <name>|random --seed N`. `make_video.sh` defaults to `random`, draws a seed when one is not passed, logs `template` and `seed`, and writes `<pinyin>_<id>_9x16_<template>.mp4`.
+| 模板 | 视觉与顺序 |
+| --- | --- |
+| ad_masthead | 深绿刊头、大照片、紧凑说明；保留原广告版 |
+| ad_photo_story | 奶油实拍画报、双横图与文字带；保留原广告版 |
+| ad_photo_story_v20 | 当前视觉为 v23：室内/价格 → 户型 → 可用实拍 → 小区 → 资料；约 32px 上下边距 |
+| tour_route | 奶油/森林绿、编号节点、下一站；室内开场 → 房间 → 小区 → 完整户型 |
+| cinema_immersive | 满屏实拍、局部渐变、金白叠字；室内/价格 → 小区 → 房间 → 户型收尾 |
 
-## gold_classic
+五套绘图函数集中在 `slideshow_templates.py`；不要把历史模板批量套成同一版式。共享文字和照片放置在 `slideshow_layouts.py`，时间线与动效在 `slideshow_engine.py`，名称和随机池在 `slideshow_common.py`。
 
-The current v4d board, kept as the reference look.
+- 本轮是代码整理，不重做五套模板的照片框、字号、颜色、叙事或动画设计。
+- story 的约 32px 上下边距保持，照片占满其余空间；不得恢复 144px 的旧竖向文字内缩，不留无用底部空白。
+- 横图按已有裁切/横移规则展示，户型保持完整静态；不拉伸照片，不生成填充内容。
+- 标题、价格、空间名和卡片使用实际 listing 字段。缺房间照片跳过，不虚构事实；同一照片不重复占用镜头。
+- 全曲音乐决定总时长；不截取、不循环、不变速。SFX 默认音量 0.12。
+- 固定 seed 可复现模板、字体、动效和默认音乐选择；显式 `--bgm-random` 例外。
+- 默认直接产出 MP4，不进行转场像素阈值“内审”或自动替换转场，不附带 PNG/JSON。
+- 若需要排障，显式加 `--diagnostics`；只需预览时用 `preview_composition.py`，只生成一张联系表。
 
-- Cover: left gold block (location), serif community name, gold-gradient price, unit beside the price when it fits and on the next line when it does not, photo, chips under the photo.
-- Title cards: gold block, serif title overlapping the photo top by 40 px, outlined pills under the photo.
-- Captions: left row of gold-outline pills; the first pill on a hero is filled.
-- Transitions (`impact`): whip, zoom_blur, flash, glitch, light_leak, spin, push, wipe, zoom.
-- End card: left-aligned name and price, then a one-column label / value sheet with hairlines.
-
-## editorial
-
-A magazine column. The photograph sits above the type; nothing overlaps the picture.
-
-- Cover: full-width photo on top. Under it, on black: gold tracked kicker, serif name, short gold rule, gold price, unit, then a middot spec line.
-- Title cards: same column under the photo (kicker, title, rule, spec). No pills, no title sitting on the photo.
-- Captions: one spec line under the title block (`3室2厅  ·  99㎡  ·  朝南`), gold middots, ink words. Left, not pills.
-- Transitions (`glide`): wipe, push, light_leak, zoom, slide_left.
-- End card: kicker, name, price, then a two-column grid (label over value).
-
-## poster
-
-Centred poster. Type is split above and below the photo.
-
-- Cover: centred gold block, centred serif name, centred price with the unit always underneath, then the photo, then centred gold blocks.
-- Title cards: centred gold block and centred title above the photo; captions only below the photo. No overlap.
-- Captions: filled gold rectangles, square corners, centred as a group. Not pills.
-- Transitions (`punch`): whip, flash, zoom_blur, spin, light_leak.
-- End card: everything centred — block, name, price, unit, then one centred fact line per row.
-
-## ledger
-
-Price-led cover and a left gold rail. The rail stops at the photo so the picture stays full width.
-
-- Cover: rail, huge price first, unit under the price, community name under that, kicker, photo, then one gold strip of facts.
-- Title cards: gold block and the room title on one row (title drops below the block when the row is too wide), photo, gold strip.
-- Captions: a single gold strip under the photo, black bold type, middots, centred inside the strip.
-- Transitions (`signal`): glitch, wipe, push, light_leak, zoom_blur.
-- End card: rail, name on the left, price right-aligned under the name, each fact as a gold label block plus a value.
-
-## Shared text rule
-
-Every drawn string is measured with its stroke, shadow, and price glow. The box must sit inside `[60, 1020] × [60, 1860]`. A line stays on one row at the largest size that fits, down to its minimum (48 px, or 120 px for titles and the price). If it still does not fit, it wraps into even pieces so the last line is not a single character (时代中国 / 时代天韵, not a leftover 韵). A bounds pass records each box and prints `text bounds check: PASS, N boxes`. `--text-bounds strict` exits non-zero on a miss.
+视觉调整按快速迭代偏好：改动目标样式，查看少量代表帧，用已有素材和同音乐做一条样片。不运行批量回归/解码矩阵。

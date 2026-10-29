@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 SR = 48000
+DEFAULT_VOLUME = 0.12
 SFX_DIR = Path(__file__).resolve().parent / 'sfx'
 
 # Transition name -> effect id. Unknown names fall through to whoosh except hard cuts.
@@ -294,7 +295,7 @@ def ensure_library(folder=None, force=False):
     return {item['id']: item for item in sounds}, folder
 
 
-def mix_under(bed_wav, events, out_wav, volume=0.35, folder=None):
+def mix_under(bed_wav, events, out_wav, volume=DEFAULT_VOLUME, folder=None):
     """Add SFX onto a stereo bed. Each event's peak sample lands on event['time'].
 
     events: [{time, id, transition, dir}]

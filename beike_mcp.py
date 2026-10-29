@@ -3,7 +3,8 @@ import json, re, time, urllib.request, urllib.error
 from pathlib import Path
 
 URL = 'https://building.ke.com/mcp'
-CLI_VERSION = '0.2.27'
+CLI_VERSION = '0.2.28'
+_active_key = ''  # Set only by Client; logging never opens the credential file.
 
 
 class MCPError(RuntimeError):
@@ -12,7 +13,7 @@ class MCPError(RuntimeError):
 
 def load_key():
     p = Path.home() / '.beike' / 'BEIKE_MCP_API_KEY'
-    k = p.read_text().strip() if p.is_file() else ''
+    k = p.read_text(encoding='utf-8-sig').strip() if p.is_file() else ''
     if k.lower().startswith('bearer '):
         k = k.split(None, 1)[1].strip()
     if not k:
@@ -23,10 +24,7 @@ def load_key():
 def redact(text):
     """Remove the API key from any string that might be logged."""
     text = str(text)
-    try:
-        secret = load_key()
-    except MCPError:
-        secret = ''
+    secret = _active_key
     if secret:
         text = text.replace(secret, '[REDACTED]')
     text = re.sub(r'(?i)bearer\s+\S+', 'Bearer [REDACTED]', text)
@@ -36,24 +34,27 @@ def redact(text):
 
 class Client:
     def __init__(self, url=URL, timeout=60, retries=3):
+        global _active_key
         self.url, self.timeout, self.retries = url, timeout, retries
         self._key = load_key()
+        _active_key = self._key
         self.session = None
         self._id = 0
 
     def _post(self, payload, expect_reply=True):
         body = json.dumps(payload).encode()
-        hdr = {'Authorization': 'Bearer ' + self._key, 'X-Beike-Cli-Version': CLI_VERSION,
+        hdr = {'User-Agent': f'beike-cli/{CLI_VERSION}', 'Authorization': 'Bearer ' + self._key, 'X-Beike-Cli-Version': CLI_VERSION,
                'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
                'MCP-Protocol-Version': '2025-03-26'}
         if self.session:
+            hdr['X-Beike-Session-Id'] = self.session
             hdr['Mcp-Session-Id'] = self.session
         last = None
         for attempt in range(self.retries):
             try:
                 req = urllib.request.Request(self.url, data=body, headers=hdr, method='POST')
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                    sid = r.headers.get('Mcp-Session-Id')
+                    sid = r.headers.get('X-Beike-Session-Id') or r.headers.get('Mcp-Session-Id')
                     if sid:
                         self.session = sid
                     ctype = r.headers.get('Content-Type', '')
@@ -152,3 +153,19 @@ class Client:
             return json.loads(txt)
         except ValueError:
             return txt
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Beike MCP: credentials only from ~/.beike/BEIKE_MCP_API_KEY')
+    parser.add_argument('--list-tools', action='store_true', help='Connect and list actual tool names and argument fields')
+    args = parser.parse_args()
+    if args.list_tools:
+        try:
+            for tool in Client().connect().tools():
+                fields = ', '.join(tool.get('inputSchema', {}).get('properties', {}))
+                print(redact(f"{tool['name']}({fields})"))
+        except (MCPError, OSError) as exc:
+            parser.exit(1, redact(f'{exc}\n'))
+    else:
+        parser.print_help()

@@ -3,7 +3,7 @@
 
     fetch_listing.py <house_id> [--out-dir DIR] [--city 广州] [--type auto|sale|rent] [--force]
 
-Writes into DIR (default /workspace/ke-house-<id>):
+Writes into DIR (default data/ke-house-<id>):
   raw_house_detail.txt / raw_resblock_detail.txt   entity_detail responses (verbatim)
   raw_house_material.json / raw_resblock_material.json   entity_material responses
   listing.json / manifest.json   same schema build_slideshow.py already reads
@@ -109,7 +109,7 @@ def download_best(url):
 class Fetcher:
     def __init__(self, args):
         self.args = args
-        self.out = Path(args.out_dir or f'/workspace/ke-house-{args.house_id}')
+        self.out = Path(args.out_dir).resolve() if args.out_dir else Path(__file__).resolve().parent / 'data' / f'ke-house-{args.house_id}'
         self.client = None
 
     def mcp(self):
@@ -137,7 +137,7 @@ class Fetcher:
         if not listing_path.is_file() or not manifest_path.is_file():
             return False
         try:
-            man = json.loads(manifest_path.read_text())
+            man = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
         except ValueError:
             return False
         if not isinstance(man, dict):
@@ -146,22 +146,25 @@ class Fetcher:
         usable = [i for i in images if i.get('role') != 'vr_cover']
         if not usable:
             return False
-        return all(Path(i.get('path') or '').is_file() for i in usable)
+        return all((self.out / (i.get('rel_path') or '')).is_file() or Path(i.get('path') or '').is_file() for i in usable)
 
     def detail(self, ids, etype, city):
         return self.mcp().call('entity_detail', {'entity_ids': ids, 'entity_type': etype, 'city_name': city})
 
     def find_house(self):
-        """Return (city, entity_type, raw_text, blocks). Tries --city first, then common cities."""
+        """Return (city, entity_type, raw_text, blocks). Queries --city; scans other cities only with --scan-cities."""
         hid = self.args.house_id
+        types = {'auto': ['house', 'rent_house'], 'sale': ['house'], 'rent': ['rent_house'], 'new': ['house']}[self.args.type]
         p = self.cached('raw_house_detail.txt')
         meta = self.out / 'raw_fetch_meta.json'
         if p and meta.is_file():
-            m = json.loads(meta.read_text())
-            txt = p.read_text()
-            return m['city'], m['entity_type'], txt, parse_detail(txt)
-        types = {'auto': ['house', 'rent_house'], 'sale': ['house'], 'rent': ['rent_house'], 'new': ['house']}[self.args.type]
-        cities = [self.args.city] + [c for c in CITIES if c != self.args.city] if self.args.city else CITIES
+            m = json.loads(meta.read_text(encoding='utf-8-sig'))
+            if m.get('house_id') == hid and m.get('city') == self.args.city and m.get('entity_type') in types:
+                txt = p.read_text(encoding='utf-8-sig')
+                return m['city'], m['entity_type'], txt, parse_detail(txt)
+        cities = [self.args.city]
+        if self.args.scan_cities:
+            cities += [c for c in CITIES if c != self.args.city]
         for etype in types:
             for city in cities:
                 txt = self.detail(hid, etype, city)
@@ -169,8 +172,8 @@ class Fetcher:
                 if hid in blocks:
                     log(f'found {hid} as {etype} in {city}')
                     raw = txt if isinstance(txt, str) else json.dumps(txt, ensure_ascii=False)
-                    (self.out / 'raw_house_detail.txt').write_text(beike_mcp.redact(raw))
-                    meta.write_text(json.dumps({'city': city, 'entity_type': etype, 'house_id': hid}, ensure_ascii=False))
+                    (self.out / 'raw_house_detail.txt').write_text(beike_mcp.redact(raw), encoding='utf-8')
+                    meta.write_text(json.dumps({'city': city, 'entity_type': etype, 'house_id': hid}, ensure_ascii=False), encoding='utf-8')
                     return city, etype, txt, blocks
                 if self.args.city and city == self.args.city and len(cities) > 1:
                     log(f'not found in {city}, scanning other cities...')
@@ -179,14 +182,15 @@ class Fetcher:
     def material(self, name, eid, etype, city, fields):
         p = self.cached(name)
         if p:
-            return json.loads(p.read_text())
+            return json.loads(p.read_text(encoding='utf-8-sig'))
         try:
             data = parse_material(self.mcp().call('entity_material', {
                 'entity_ids': eid, 'entity_type': etype, 'city_name': city, 'fields': fields}))
         except beike_mcp.MCPError as e:
             log(f'material {etype}/{fields} failed: {e}')
             data = {}
-        (self.out / name).write_text(beike_mcp.redact(json.dumps(data, ensure_ascii=False, indent=2)))
+        if data:
+            (self.out / name).write_text(beike_mcp.redact(json.dumps(data, ensure_ascii=False, indent=2)), encoding='utf-8')
         return data
 
     def run(self):
@@ -215,7 +219,7 @@ class Fetcher:
                 rb, rid = info, cid
                 break
         (self.out / 'raw_resblock_detail.json').write_text(
-            beike_mcp.redact(json.dumps(rb, ensure_ascii=False, indent=2)))
+            beike_mcp.redact(json.dumps(rb, ensure_ascii=False, indent=2)), encoding='utf-8')
 
         mat_type = 'rent_house' if etype == 'rent_house' else 'house'
         hfields = ['房源图', '户型图'] if etype == 'rent_house' else ['房源图片']
@@ -230,8 +234,7 @@ class Fetcher:
             log('no images could be downloaded')
             return 5
         if not any(i.get('role') == 'community' for i in manifest['ordered_images']):
-            log('no community photos downloaded; the opening cover needs one')
-            return 5
+            log('no community photos; renderer will use available interior photos')
         layout_text = str(listing.get('layout') or '')
         if '厨' not in layout_text:
             missing = [m for m in missing if m != '厨房']
@@ -248,8 +251,8 @@ class Fetcher:
                          'vr_skipped': vr_skipped, 'failed_downloads': failed,
                          'notes': [f'自动抓取 (fetch_listing.py)；缺失: {"、".join(missing) or "无"}',
                                    vr_note]})
-        (self.out / 'listing.json').write_text(beike_mcp.redact(json.dumps(listing, ensure_ascii=False, indent=2)))
-        (self.out / 'manifest.json').write_text(beike_mcp.redact(json.dumps(manifest, ensure_ascii=False, indent=2)))
+        (self.out / 'listing.json').write_text(beike_mcp.redact(json.dumps(listing, ensure_ascii=False, indent=2)), encoding='utf-8')
+        (self.out / 'manifest.json').write_text(beike_mcp.redact(json.dumps(manifest, ensure_ascii=False, indent=2)), encoding='utf-8')
         log(f'ok: {listing["title"]} | {len(manifest["ordered_images"])} images | missing={missing} -> {self.out}')
         return 0
 
@@ -351,14 +354,6 @@ def plan_images(hm, rm):
             continue
         room = (p.get('房间名称') or '其他').strip() or '其他'
         plan.append({'url': url, 'room': room, 'role': 'room', 'label': ROOM_LABEL.get(room, room)})
-    vr = hp.get('VR')
-    cover = ''
-    if isinstance(vr, dict):
-        cover = vr.get('封面图') or ''
-    elif isinstance(vr, str):
-        cover = vr
-    if cover:
-        plan.append({'url': cover, 'room': 'VR', 'role': 'vr_cover', 'label': 'VR封面', 'optional': True})
     return plan
 
 
@@ -388,7 +383,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('house_id')
     ap.add_argument('--out-dir', default=None)
-    ap.add_argument('--city', default='广州', help='City to query first (others are scanned if not found).')
+    ap.add_argument('--city', default='广州', help='City to query (default 广州). Other cities require --scan-cities.')
+    ap.add_argument('--scan-cities', action='store_true', help='Explicitly scan other cities after a miss')
     ap.add_argument('--type', choices=['auto', 'sale', 'new', 'rent'], default='auto')
     ap.add_argument('--force', action='store_true', help='Ignore cached files and refetch everything.')
     args = ap.parse_args()
@@ -398,7 +394,7 @@ def main():
         return Fetcher(args).run()
     except beike_mcp.MCPError as e:
         log(f'Beike MCP failure: {beike_mcp.redact(e)}')
-        return 2 if 'No Beike API key' in str(e) else 3
+        return 2 if 'Beike API key file' in str(e) else 3
 
 
 if __name__ == '__main__':
