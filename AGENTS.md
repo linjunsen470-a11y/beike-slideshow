@@ -1,44 +1,47 @@
-# Agent guidance
+# Agent 维护规则
 
-This is a small personal tool: fetch a Beike listing and render its photos and facts into a 9:16 slideshow video. Keep changes practical and scoped; avoid CI, framework additions, repository restructuring, or dependency lockfile campaigns.
+## 背景与任务范围
 
-- No LLM calls in the fetch/render path, including BGM analysis and captions.
-- Read the Beike key only from `~/.beike/BEIKE_MCP_API_KEY`. Never add an environment key override, print the key, inspect the real secret during maintenance, or commit secrets.
-- The scheduler bot does not write code; Grok/Codex handles code changes.
+本项目是个人房源出片工具，目标是把用户指定的贝壳房源资料和真实照片转换为竖屏视频。用户已认可五个推荐模板，维护重点是稳定复用、易读易用、减少费用和无用产物。不要增加 CI、通用框架、仓库重构工程或依赖锁文件整治。
 
-Where to change things:
+先阅读 [README.md](README.md) 了解输入、流程和命令，再按需要阅读 [TEMPLATES_PLAN.md](TEMPLATES_PLAN.md)。历史归档不是当前规范。调度 bot 不写代码，代码修改由 Grok/Codex 处理。
 
-- `make_video.py` / `make_video.sh`: one-command orchestration, fetch/render flags, seed and template selection.
-- `fetch_listing.py`: listing lookup, downloads, listing/manifest files and fetch cache; `beike_mcp.py`: MCP requests and file-only key loading.
-- `remote_edit_images.py`: optional paid batch photo editing; `image_edit_api.py`: Gemini/OpenAI request adapters. Default to the economy model, bounded concurrency, no automatic retries or model upgrades.
-- `build_slideshow.py`: render CLI and encoding. `slideshow_templates.py`: the five recommended layouts; `slideshow_layouts.py`: shared typography and legacy layouts; `slideshow_engine.py`: timeline/motion/frame composition; `slideshow_common.py`: primitives, fonts and template registry. Keep `TEMPLATES_PLAN.md` aligned with template changes.
-- `bgm_tools.py`: track selection, audio analysis/cache and loudness; `sfx_tools.py`: sound effects. Preserve `bgm/user/`, audio assets and `.analysis/` caches.
-- `preview_composition.py`: explicit local preview, one contact sheet, requires `--house-dir`.
-- Normal rendering produces only MP4. Detailed review output is opt-in with `--diagnostics`; do not restore automatic transition repair/proof gates.
-- Keep current behavior in README.md and TEMPLATES_PLAN.md. Record maintenance checks briefly in README.md; do not create per-run reports. `archive/` holds local compressed history, not runtime code or current instructions.
+## 执行用户的出片任务
 
-## User preference: fast visual iteration (2026-10-29)
+1. 从本次请求确定房源编号、城市、使用原图还是改图、模板及音乐；复用会话中已明确的信息。文档占位符不是真实参数，不得拿旧样片编号代替当前房源。
+2. 先检查对应本地目录。用户要求复用素材时用 `--skip-fetch`，不得重新抓取；不要把已有其他房源的资料混入本次任务。
+3. 仅在用户要求改图时运行独立的 `remote_edit_images.py`。`make_video.py` 不会调用改图 API；`--edited` 只选择已有改图 manifest。
+4. 多模板对比应复用同一份素材、同一首明确指定的音乐、同一 seed，每条输出使用不同文件名。命令与参数见 README 的五模板循环，不另行维护第二套示例。
+5. 每步核对退出状态。部分改图失败、接口拒绝或素材缺失时如实报告，不宣称全部成功、不虚构房源数据。
+6. 默认只输出 MP4。不要自动开启 `--diagnostics`、生成审阅包或增加转场像素阈值修复门槛。
 
-For video-style tuning, prioritize quickly making a visible sample. Do not add or
-run engineering test suites, regression matrices, multiple smoke renders, or
-exhaustive frame/decode checks. Make the requested visual change, inspect a few
-representative frames, and render one sample using existing local material and
-the same music. Check only obvious layout problems and successful video output.
-Keep the change report brief. Broader testing is for an explicit user request or
-a concrete failure that needs diagnosis. This supersedes the routine checks below
-for visual-only iterations.
+## 凭证、费用与本地资产
 
-Visual preference clarified with marked screenshots: avoid large blank outer
-bands. For the current story review, use approximately 32px top/bottom margins
-at 1080×1920 and let photos occupy the remaining height. Do not restore the
-old automatic 144px vertical text inset or leave unused space below captions.
+- 抓取、字幕、音乐分析和渲染路径不得调用 LLM。付费图像 API 仅在独立可选改图步骤使用。
+- 贝壳凭证只从 `~/.beike/BEIKE_MCP_API_KEY` 读取。禁止环境变量覆盖、打印、检查真实秘密或提交凭证。维护文档时不得读取密钥或请求接口。
+- 改图使用现有经济档、有限并发、结果复用；不隐式重试、不自动升级模型，不因渲染失败重复支付改图费用。
+- 保留 `bgm/user/`、音效、`.analysis/` 缓存、原图、已改图和用户成片。忽略规则不是删除授权；清理历史文件时保证路径限定在工作区，并保留需要的可恢复归档。
+- 不提交 `.env`、房源数据、日志、生成图片/视频、下载的客户端和历史压缩包。不要通过命令输出展示凭证。
 
-For other code changes, light checks: `bash -n make_video.sh`, parse changed Python files for syntax, and `python3 -B build_slideshow.py --help`. Do not fetch listings or read the key for a documentation-only change.
+## 修改位置
 
-When rendering changes need a smoke test, use an existing local listing folder with suitable images, and a distinct output filename:
+完整职责表以 README 为准，优先在最小相关模块修改：
 
-```bash
-python -B make_video.py <id> --skip-fetch --seed 7 --width 270 --height 480 --fps 10 --preset ultrafast --output data/ke-house-<id>/video/smoke.mp4
-```
+- 调用流程：`make_video.py`；Bash 包装：`make_video.sh`。
+- 获取资料/下载：`fetch_listing.py`；请求协议：`beike_mcp.py`。
+- 改图任务/缓存：`remote_edit_images.py`；模型请求：`image_edit_api.py`。
+- 五个推荐模板：`slideshow_templates.py`；共享文字布局：`slideshow_layouts.py`。
+- 时间线/动效：`slideshow_engine.py`；基础绘图/名单：`slideshow_common.py`；渲染 CLI/编码：`build_slideshow.py`。
+- 音乐/音效：`bgm_tools.py`、`sfx_tools.py`；单张联系表：`preview_composition.py`。
 
-Check the exit status, duration, video and audio streams. This reduced-resolution smoke does not verify full-resolution typography. Preserve executable modes of existing scripts. Record changes and relevant checks briefly in README.md; never commit secrets or generated logs/videos.
+模板变更同步 TEMPLATES_PLAN；命令、默认值、输出和限制变更同步 README。维护检查简记于 README，不新增逐次 REPORT 文件。保留脚本已有可执行权限。
+
+## 验证的适当范围
+
+**视觉迭代优先快速出样片。** 只改目标样式，查看少量代表帧，用已有素材和同音乐渲染一条样片，检查明显布局问题与成功输出。不要新增/运行测试套件、回归矩阵、多条 smoke 或全片逐帧解码；只有用户明确要求或具体故障需要诊断时才扩大检查。
+
+story 模板在 1080×1920 下保留约 32px 上下边距，照片占用其余空间。不得恢复旧的 144px 竖向内缩，也不留无用的字幕下方空白。
+
+其他代码修改做轻量检查：解析修改的 Python 文件，执行 `python -B build_slideshow.py --help`；修改 shell 时执行 `bash -n make_video.sh`。必要的低清验证可用 270×480、10 fps、ultrafast 和独立输出路径；低清结果不能证明全分辨率文字质量。
+
+文档修改只核对命令参数、占位符、相对链接与 `git diff --check`，不抓取、不改图、不渲染。用户要求推送时，提交前检查暂存范围，不纳入凭证或本地生成物。
